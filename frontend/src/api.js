@@ -120,6 +120,11 @@ export const api = {
 
   // AI Advisor (Gemini)
   askAI: (data) => request('/ai/ask', { method: 'POST', body: JSON.stringify(data) }),
+  getAIConversations: () => request('/ai/conversations'),
+  createAIConversation: () => request('/ai/conversations', { method: 'POST', body: JSON.stringify({}) }),
+  getAIConversation: (id) => request(`/ai/conversations/${id}`),
+  renameAIConversation: (id, title) => request(`/ai/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  deleteAIConversation: (id) => request(`/ai/conversations/${id}`, { method: 'DELETE' }),
 
   // Roles
   getRoles: (orgId) => request(`/organizations/${orgId}/roles/`),

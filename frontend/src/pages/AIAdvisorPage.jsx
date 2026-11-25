@@ -15,31 +15,81 @@ export default function AIAdvisorPage() {
   const [showKeyInput, setShowKeyInput] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [history, setHistory] = useState(() => {
-    const saved = localStorage.getItem('soprano_advisor_history');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return [];
-      }
-    }
-    return [
-      {
-        id: 'welcome',
-        role: 'advisor',
-        text: 'Приветствую. Я — Советник синдиката Soprano. Ожидаю ваш запрос по вопросам стратегического управления, кадровой дисциплины, финансовой безопасности или операционной координации. Говорите прямо и по существу.',
-        timestamp: new Date().toISOString()
-      }
-    ];
-  });
+  const [conversations, setConversations] = useState([]);
+  const [activeConversationId, setActiveConversationId] = useState(null);
+  const [history, setHistory] = useState([]);
 
   const chatEndRef = useRef(null);
 
   useEffect(() => {
-    localStorage.setItem('soprano_advisor_history', JSON.stringify(history));
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [history]);
+
+  useEffect(() => {
+    api.getAIConversations().then(async (items) => {
+      if (items.length) {
+        setConversations(items);
+        setActiveConversationId(items[0].id);
+      } else {
+        const created = await api.createAIConversation();
+        setConversations([created]);
+        setActiveConversationId(created.id);
+      }
+    }).catch((err) => setError(err.message || 'Не удалось загрузить диалоги'));
+  }, []);
+
+  useEffect(() => {
+    if (!activeConversationId) return;
+    api.getAIConversation(activeConversationId)
+      .then((conversation) => setHistory(conversation.messages.map((message) => ({
+        id: message.id,
+        role: message.role === 'assistant' ? 'advisor' : 'user',
+        text: message.content,
+        timestamp: message.created_at,
+      }))))
+      .catch((err) => setError(err.message || 'Не удалось загрузить переписку'));
+  }, [activeConversationId]);
+
+  const handleNewConversation = async () => {
+    try {
+      const conversation = await api.createAIConversation();
+      setConversations((items) => [conversation, ...items]);
+      setActiveConversationId(conversation.id);
+      setHistory([]);
+      setError('');
+    } catch (err) {
+      setError(err.message || 'Не удалось создать диалог');
+    }
+  };
+
+  const handleRenameConversation = async (conversation) => {
+    const title = window.prompt('Название диалога', conversation.title)?.trim();
+    if (!title || title === conversation.title) return;
+    try {
+      const updated = await api.renameAIConversation(conversation.id, title);
+      setConversations((items) => items.map((item) => item.id === updated.id ? updated : item));
+    } catch (err) {
+      setError(err.message || 'Не удалось переименовать диалог');
+    }
+  };
+
+  const handleDeleteConversation = async (conversation) => {
+    if (!window.confirm(`Удалить диалог «${conversation.title}»?`)) return;
+    try {
+      await api.deleteAIConversation(conversation.id);
+      const remaining = conversations.filter((item) => item.id !== conversation.id);
+      if (remaining.length) {
+        setConversations(remaining);
+        if (activeConversationId === conversation.id) setActiveConversationId(remaining[0].id);
+      } else {
+        const created = await api.createAIConversation();
+        setConversations([created]);
+        setActiveConversationId(created.id);
+      }
+    } catch (err) {
+      setError(err.message || 'Не удалось удалить диалог');
+    }
+  };
 
   const handleSaveApiKey = (e) => {
     e.preventDefault();
@@ -50,35 +100,22 @@ export default function AIAdvisorPage() {
 
   const handleAsk = async (questionText = prompt) => {
     const q = questionText.trim();
-    if (!q || loading) return;
+    if (!q || loading || !activeConversationId) return;
 
     setError('');
     setLoading(true);
 
-    const userEntry = {
-      id: `u-${Date.now()}`,
-      role: 'user',
-      text: q,
-      timestamp: new Date().toISOString()
-    };
-
-    setHistory(prev => [...prev, userEntry]);
     setPrompt('');
 
     try {
       const res = await api.askAI({
         prompt: q,
+        conversation_id: activeConversationId,
         api_key: apiKey.trim() || undefined
       });
-
-      const advisorEntry = {
-        id: `a-${Date.now()}`,
-        role: 'advisor',
-        text: res.answer,
-        timestamp: new Date().toISOString()
-      };
-
-      setHistory(prev => [...prev, advisorEntry]);
+      const conversation = await api.getAIConversation(activeConversationId);
+      setHistory(conversation.messages.map((message) => ({ id: message.id, role: message.role === 'assistant' ? 'advisor' : 'user', text: message.content, timestamp: message.created_at })));
+      setConversations((items) => items.map((item) => item.id === activeConversationId ? { ...item, title: item.title.startsWith('Диалог ') ? q.split(/\s+/).slice(0, 3).join(' ') : item.title, updated_at: new Date().toISOString() } : item));
     } catch (err) {
       setError(err.message || 'Ошибка соединения с советником');
       if (err.message?.includes('API') || err.message?.includes('ключ')) {
@@ -87,19 +124,6 @@ export default function AIAdvisorPage() {
     } finally {
       setLoading(false);
     }
-  };
-
-  const handleClearHistory = () => {
-    if (!confirm('Очистить протокол консультаций?')) return;
-    const initial = [
-      {
-        id: 'welcome',
-        role: 'advisor',
-        text: 'Протокол очищен. Жду ваших директив и вопросов, руководство.',
-        timestamp: new Date().toISOString()
-      }
-    ];
-    setHistory(initial);
   };
 
   const handleCopyText = (text) => {
@@ -126,13 +150,22 @@ export default function AIAdvisorPage() {
           >
             {apiKey ? 'Ключ Gemini настроен ✓' : 'Указать ключ Gemini API'}
           </button>
-          <button className="btn btn-secondary btn-sm" onClick={handleClearHistory}>
-            Очистить протокол
-          </button>
+          <button className="btn btn-primary btn-sm" onClick={handleNewConversation}>Новый диалог</button>
         </div>
       </div>
 
-      <div className="page-body" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 160px)', paddingBottom: 16 }}>
+      <div className="page-body" style={{ display: 'flex', gap: 14, height: 'calc(100vh - 160px)', paddingBottom: 16 }}>
+        <aside className="card" style={{ width: 250, flexShrink: 0, overflowY: 'auto', padding: 10 }}>
+          <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '8px 10px' }}>Ваши диалоги</div>
+          {conversations.map((conversation) => (
+            <div key={conversation.id} style={{ display: 'flex', gap: 4, alignItems: 'center', marginBottom: 4 }}>
+              <button className={`btn ${activeConversationId === conversation.id ? 'btn-primary' : 'btn-secondary'}`} style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', textAlign: 'left' }} onClick={() => setActiveConversationId(conversation.id)} title={conversation.title}>{conversation.title}</button>
+              <button className="btn btn-secondary btn-sm" title="Переименовать" onClick={() => handleRenameConversation(conversation)}>✎</button>
+              <button className="btn btn-secondary btn-sm" title="Удалить" onClick={() => handleDeleteConversation(conversation)}>×</button>
+            </div>
+          ))}
+        </aside>
+        <div style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
         {/* API KEY CONFIGURATION MODAL / BAR */}
         {showKeyInput && (
           <div className="card" style={{ marginBottom: 16, border: '1px solid var(--accent)', background: 'var(--bg-secondary)' }}>
@@ -319,6 +352,7 @@ export default function AIAdvisorPage() {
             {loading ? 'Обработка...' : 'Запросить совет'}
           </button>
         </form>
+        </div>
       </div>
     </>
   );

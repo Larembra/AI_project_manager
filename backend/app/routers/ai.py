@@ -8,7 +8,7 @@ import uuid
 from typing import Optional, Any
 from pydantic import BaseModel
 from fastapi import APIRouter, HTTPException, Depends
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.database import get_db
@@ -17,6 +17,8 @@ from app.models.user import User
 from app.models.organization import Organization
 from app.models.project import Project, ProjectTask, ProjectDocument
 from app.models.member import Member
+from app.models.ai_conversation import AIConversationMessage
+from app.routers.ai_conversations import owned_conversation, add_message
 from app.utils.permissions import get_member_or_fail
 
 router = APIRouter(prefix="/api/ai", tags=["ai"])
@@ -35,6 +37,7 @@ SYSTEM_INSTRUCTION = (
 
 class AskAIRequest(BaseModel):
     prompt: str
+    conversation_id: uuid.UUID
     organization_id: Optional[uuid.UUID] = None
     project_id: Optional[uuid.UUID] = None
     context: Optional[str] = None
@@ -202,6 +205,15 @@ async def ask_advisor(
             detail="Ключ Gemini API не настроен. Укажите ключ в поле ввода советника или задайте переменную окружения GEMINI_API_KEY."
         )
 
+    conversation = await owned_conversation(db, current_user, req.conversation_id)
+    history_result = await db.execute(
+        select(AIConversationMessage)
+        .where(AIConversationMessage.conversation_id == conversation.id)
+        .order_by(AIConversationMessage.created_at.desc(), AIConversationMessage.id.desc())
+        .limit(settings.ai_history_limit)
+    )
+    previous_messages = list(reversed(history_result.scalars().all()))
+
     # 1. Сбор контекста организации и проектов (RAG и системный контекст)
     context_parts = []
 
@@ -265,7 +277,17 @@ async def ask_advisor(
     full_context = "\n\n".join(context_parts) if context_parts else "Контекст организации: платформа Soprano."
 
     try:
-        reply = await asyncio.to_thread(_call_gemini_api, api_key, prompt, full_context)
+        history_context = "\n\n[Предыдущая переписка этого диалога]:\n" + "\n".join(
+            f"{'Пользователь' if message.role == 'user' else 'Советник'}: {message.content}"
+            for message in previous_messages
+        ) if previous_messages else ""
+        reply = await asyncio.to_thread(_call_gemini_api, api_key, prompt, full_context + history_context)
+        message_count = await db.scalar(select(func.count()).select_from(AIConversationMessage).where(AIConversationMessage.conversation_id == conversation.id))
+        if message_count == 0 and conversation.title.startswith("Диалог "):
+            words = prompt.split()
+            conversation.title = " ".join(words[:3])[:200] or conversation.title
+        await add_message(db, conversation, "user", prompt, settings.AI_HISTORY_MAX_LIMIT)
+        await add_message(db, conversation, "assistant", reply, settings.AI_HISTORY_MAX_LIMIT)
 
         # Детекция предложенного действия (Action Proposal)
         suggested_action = None

@@ -35,3 +35,4 @@ class User(Base):
     assigned_cards = relationship("Card", back_populates="assignee", foreign_keys="Card.assignee_id")
     created_cards = relationship("Card", back_populates="creator", foreign_keys="Card.creator_id")
     notifications = relationship("Notification", back_populates="user", cascade="all, delete-orphan")
+    ai_conversations = relationship("AIConversation", back_populates="user", cascade="all, delete-orphan")

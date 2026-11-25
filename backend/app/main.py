@@ -8,7 +8,7 @@ if str(backend_dir) not in sys.path:
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import auth, organizations, members, departments, invitations, chat, finance, absences, admin, search, boards, notifications, logs, ai, roles, projects, analytics
+from app.routers import auth, organizations, members, departments, invitations, chat, finance, absences, admin, search, boards, notifications, logs, ai, roles, projects, analytics, ai_conversations
 
 app = FastAPI(title="Soprano", version="1.0.0")
 
@@ -36,6 +36,7 @@ app.include_router(notifications.router)
 app.include_router(logs.router)
 app.include_router(logs.admin_org_logs_router)
 app.include_router(ai.router)
+app.include_router(ai_conversations.router)
 app.include_router(roles.router)
 app.include_router(projects.router)
 app.include_router(analytics.router)
