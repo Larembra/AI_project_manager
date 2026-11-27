@@ -14,6 +14,10 @@ from app.utils.security import hash_password
 
 
 async def apply_migrations(conn):
+    await conn.execute(text("ALTER TABLE ai_conversation_messages ADD COLUMN IF NOT EXISTS turn_id UUID"))
+    await conn.execute(text("ALTER TABLE ai_conversation_messages ADD COLUMN IF NOT EXISTS model VARCHAR(200)"))
+    await conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ai_conversation_messages_turn_id ON ai_conversation_messages (turn_id)"))
+    await conn.execute(text("ALTER TABLE audit_logs ADD COLUMN IF NOT EXISTS via_agent BOOLEAN NOT NULL DEFAULT FALSE"))
     await conn.execute(
         text(
             """
@@ -62,6 +66,61 @@ async def apply_migrations(conn):
         )
     )
     statements = [
+        """
+        CREATE TABLE IF NOT EXISTS ai_agent_steps (
+            id UUID PRIMARY KEY,
+            conversation_id UUID NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            turn_id UUID NOT NULL,
+            step_index INTEGER NOT NULL,
+            model VARCHAR(200) NOT NULL,
+            raw_parts JSONB NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_ai_agent_steps_conversation_id ON ai_agent_steps (conversation_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ai_agent_steps_turn_id ON ai_agent_steps (turn_id)",
+        """
+        CREATE TABLE IF NOT EXISTS ai_tool_calls (
+            id UUID PRIMARY KEY,
+            step_id UUID NOT NULL REFERENCES ai_agent_steps(id) ON DELETE CASCADE,
+            conversation_id UUID NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+            user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            organization_id UUID REFERENCES organizations(id) ON DELETE CASCADE,
+            project_id UUID REFERENCES projects(id) ON DELETE CASCADE,
+            call_index INTEGER NOT NULL,
+            name VARCHAR(100) NOT NULL,
+            args JSONB NOT NULL,
+            result JSONB,
+            status VARCHAR(30) NOT NULL,
+            risk VARCHAR(20) NOT NULL,
+            summary VARCHAR(500) NOT NULL,
+            error_code VARCHAR(100),
+            created_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            executed_at TIMESTAMP WITH TIME ZONE,
+            resolved_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            resolved_at TIMESTAMP WITH TIME ZONE,
+            expires_at TIMESTAMP WITH TIME ZONE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_ai_tool_calls_step_id ON ai_tool_calls (step_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ai_tool_calls_conversation_id ON ai_tool_calls (conversation_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ai_tool_calls_user_id ON ai_tool_calls (user_id)",
+        "CREATE INDEX IF NOT EXISTS ix_ai_tool_calls_status ON ai_tool_calls (status)",
+        """
+        CREATE TABLE IF NOT EXISTS project_integrations (
+            id UUID PRIMARY KEY,
+            project_id UUID NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+            provider VARCHAR(30) NOT NULL,
+            repo_owner VARCHAR(100) NOT NULL,
+            repo_name VARCHAR(100) NOT NULL,
+            token_encrypted VARCHAR(2000),
+            token_last4 VARCHAR(4),
+            created_by UUID REFERENCES users(id) ON DELETE SET NULL,
+            updated_at TIMESTAMP WITH TIME ZONE NOT NULL,
+            CONSTRAINT uq_project_integrations_project_provider UNIQUE (project_id, provider)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS ix_project_integrations_project_id ON project_integrations (project_id)",
         """
         CREATE TABLE IF NOT EXISTS org_roles (
             id UUID PRIMARY KEY,

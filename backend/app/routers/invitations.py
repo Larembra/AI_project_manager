@@ -1,6 +1,5 @@
 import uuid
-import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -8,16 +7,15 @@ from app.database import get_db
 from app.models.user import User
 from app.models.member import Member, OrgRole
 from app.models.invitation import Invitation, InvitationStatus
-from app.models.notification import Notification
 from app.models.audit import AuditLog
 from app.schemas.invitation import InvitationCreate, InvitationOut
 from app.utils.auth import get_current_user
 from app.utils.permissions import get_member_or_fail, require_moderator
+from app.services.members import create_organization_invitation
 
 router = APIRouter(prefix="/api/organizations/{org_id}/invitations", tags=["invitations"])
 user_invites_router = APIRouter(prefix="/api/invitations", tags=["invitations"])
 
-INVITE_EXPIRY_DAYS = 7
 
 
 @router.post("/", response_model=InvitationOut, status_code=status.HTTP_201_CREATED)
@@ -27,63 +25,7 @@ async def create_invitation(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    actor = await get_member_or_fail(db, current_user.id, org_id)
-    require_moderator(actor)
-
-    existing = await db.execute(
-        select(Invitation).where(
-            Invitation.organization_id == org_id,
-            Invitation.email == data.email,
-            Invitation.status == InvitationStatus.PENDING,
-        )
-    )
-    if existing.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="invitation_already_sent")
-
-    existing_member = await db.execute(
-        select(Member)
-        .join(User, User.id == Member.user_id)
-        .where(Member.organization_id == org_id, User.email == data.email)
-    )
-    if existing_member.scalar_one_or_none():
-        raise HTTPException(status_code=400, detail="already_a_member")
-
-    invite = Invitation(
-        organization_id=org_id,
-        inviter_id=current_user.id,
-        email=data.email,
-        token=secrets.token_urlsafe(32),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=INVITE_EXPIRY_DAYS),
-    )
-    db.add(invite)
-    await db.flush()
-    await db.refresh(invite)
-
-    user_result = await db.execute(select(User).where(User.email == data.email))
-    invited_user = user_result.scalar_one_or_none()
-    if invited_user:
-        db.add(
-            Notification(
-                user_id=invited_user.id,
-                organization_id=org_id,
-                title="Приглашение в организацию",
-                message=f"Вас пригласили в организацию. Проверьте раздел приглашений.",
-                entity_type="invitation",
-                entity_id=str(invite.id),
-            )
-        )
-
-    db.add(
-        AuditLog(
-            user_id=current_user.id,
-            organization_id=org_id,
-            action="create_invitation",
-            entity_type="invitation",
-            entity_id=str(invite.id),
-            details=f"Invite sent to {data.email}",
-        )
-    )
-
+    invite = await create_organization_invitation(db, org_id, data, current_user)
     return InvitationOut.model_validate(invite)
 
 

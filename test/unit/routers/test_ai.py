@@ -1,46 +1,54 @@
+import ssl
+import uuid
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
 import pytest
-from unittest.mock import patch
 from fastapi import HTTPException
-from app.routers.ai import ask_advisor, AskAIRequest
+from app.routers.ai import ask_advisor, AskAIRequest, _get_supported_models
 from test.factories import make_user
+from test.fakes import FakeAsyncSession, FakeResult
 
 
 @pytest.mark.asyncio
 async def test_ask_ai_empty_prompt():
-    user = make_user()
-    req = AskAIRequest(prompt="   ")
-    with pytest.raises(HTTPException) as exc_info:
-        await ask_advisor(req=req, current_user=user)
-    assert exc_info.value.status_code == 400
-    assert "не может быть пустым" in exc_info.value.detail
+    request = AskAIRequest(prompt="   ", conversation_id=uuid.uuid4())
+    with pytest.raises(HTTPException) as error:
+        await ask_advisor(req=request, current_user=make_user())
+    assert error.value.status_code == 400
+    assert "не может быть пустым" in error.value.detail
 
 
 @pytest.mark.asyncio
 async def test_ask_ai_missing_key():
-    user = make_user()
-    req = AskAIRequest(prompt="Как повысить дисциплину?")
+    request = AskAIRequest(prompt="Как повысить дисциплину?", conversation_id=uuid.uuid4())
     with patch("app.routers.ai.settings.GEMINI_API_KEY", ""), patch.dict("os.environ", {}, clear=True):
-        with pytest.raises(HTTPException) as exc_info:
-            await ask_advisor(req=req, current_user=user)
-        assert exc_info.value.status_code == 400
-        assert "Gemini API не настроен" in exc_info.value.detail
+        with pytest.raises(HTTPException) as error:
+            await ask_advisor(req=request, current_user=make_user())
+    assert error.value.status_code == 400
+    assert "Gemini API не настроен" in error.value.detail
 
 
 @pytest.mark.asyncio
-async def test_ask_ai_success():
+async def test_ask_ai_success_without_network():
     user = make_user()
-    req = AskAIRequest(prompt="Как сократить расходы?", api_key="test_key_123")
-    with patch("app.routers.ai._call_gemini_api", return_value="1. Сократить нецелевой бюджет.\n2. Усилить ревизию."):
-        res = await ask_advisor(req=req, current_user=user)
-        assert res["prompt"] == "Как сократить расходы?"
-        assert "Сократить нецелевой бюджет" in res["answer"]
+    request = AskAIRequest(prompt="Как сократить расходы?", conversation_id=uuid.uuid4(), api_key="test_key_123")
+    conversation = SimpleNamespace(id=request.conversation_id, title="Диалог 1")
+    db = FakeAsyncSession(results=[FakeResult(scalars=[]), FakeResult(scalars=[]), FakeResult(scalars=[])])
+    db.scalar = AsyncMock(return_value=0)
+    with patch("app.routers.ai.owned_conversation", new=AsyncMock(return_value=conversation)), patch("app.routers.ai.llm_client.generate_text", return_value="Сократить нецелевой бюджет."):
+        result = await ask_advisor(req=request, current_user=user, db=db)
+    assert result["prompt"] == "Как сократить расходы?"
+    assert "Сократить нецелевой бюджет" in result["answer"]
 
 
-def test_flash_lite_model_priority():
-    import ssl
-    from app.routers.ai import _get_supported_models
-    ctx = ssl._create_unverified_context()
-    models = _get_supported_models("invalid_key", ctx)
-    # Ensure flash-lite models are prioritized first and gemini-pro is not in list
-    assert "gemini-3.5-flash-lite" in models[0] or "flash-lite" in models[0]
+def test_flash_lite_model_priority_uses_fallback_without_network(monkeypatch):
+    import app.routers.ai as ai
+    ai._MODEL_CACHE.clear()
+
+    def fail_request(*args, **kwargs):
+        raise OSError("offline")
+
+    monkeypatch.setattr(ai.urllib.request, "urlopen", fail_request)
+    models = _get_supported_models("test-key", ssl.create_default_context())
+    assert "flash-lite" in models[0]
     assert "gemini-pro" not in models
