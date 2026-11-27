@@ -89,6 +89,8 @@ export default function OrganizationPage() {
   const [newProjDesc, setNewProjDesc] = useState('');
   const [newProjCat, setNewProjCat] = useState('development');
   const [newProjBudget, setNewProjBudget] = useState(0);
+  const [newProjRepoUrl, setNewProjRepoUrl] = useState('');
+  const [newProjGithubToken, setNewProjGithubToken] = useState('');
 
   // Analytics & Calendar states
   const [orgAnalytics, setOrgAnalytics] = useState(null);
@@ -284,11 +286,17 @@ export default function OrganizationPage() {
         category: newProjCat,
         budget: parseFloat(newProjBudget) || 0,
       });
+      if (newProjRepoUrl.trim()) {
+        const integration = await api.updateGitHubIntegration(p.id, { repo_url: newProjRepoUrl.trim(), token: newProjGithubToken.trim() || null });
+        if (integration.warning) alert(integration.warning);
+      }
       setProjects(prev => [p, ...prev]);
       setShowCreateProject(false);
       setNewProjName('');
       setNewProjDesc('');
       setNewProjBudget(0);
+      setNewProjRepoUrl('');
+      setNewProjGithubToken('');
       navigate(`/organizations/${orgId}/projects/${p.id}`);
     } catch (err) {
       alert(err.message);
@@ -1577,6 +1585,15 @@ export default function OrganizationPage() {
                   rows={3}
                 />
               </div>
+              <div className="form-group">
+                <label>Репозиторий GitHub (необязательно)</label>
+                <input className="form-input" type="url" placeholder="https://github.com/owner/repository" value={newProjRepoUrl} onChange={e => setNewProjRepoUrl(e.target.value)} />
+              </div>
+              {newProjRepoUrl && <div className="form-group">
+                <label>Токен GitHub (PAT)</label>
+                <input className="form-input" type="password" autoComplete="new-password" placeholder="github_pat_…" value={newProjGithubToken} onChange={e => setNewProjGithubToken(e.target.value)} required />
+                <small style={{ color: 'var(--text-muted)' }}>Токен используется только для чтения выбранного репозитория.</small>
+              </div>}
               <div className="modal-actions">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowCreateProject(false)}>Отмена</button>
                 <button type="submit" className="btn btn-primary">Создать проект</button>

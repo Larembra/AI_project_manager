@@ -11,3 +11,7 @@ from app.models.board import Board, BoardColumn, Card, CardLabel, CardLabelAssig
 from app.models.notification import Notification
 from app.models.role import OrgRoleDefinition
 from app.models.project import Project, ProjectMember, ProjectTask, ProjectDocument
+from app.models.ai_conversation import AIConversation, AIConversationMessage
+from app.models.ai_agent_step import AIAgentStep
+from app.models.ai_tool_call import AIToolCall
+from app.models.project_integration import ProjectIntegration

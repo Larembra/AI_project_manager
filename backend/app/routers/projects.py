@@ -17,6 +17,10 @@ from app.schemas.project import (
 from app.utils.auth import get_current_user
 from app.utils.permissions import get_member_or_fail, get_member_permissions
 from app.utils.audit import log_audit_action
+from app.services.access import is_project_organizer_or_privileged
+from app.services.tasks import create_project_task as create_project_task_service
+from app.services.projects import create_project_record, update_project_record
+from app.services.documents import create_project_document as create_project_document_service, update_project_document as update_project_document_service
 
 router = APIRouter(tags=["projects"])
 
@@ -28,25 +32,7 @@ async def _is_project_organizer_or_privileged(
     organization_id: uuid.UUID,
     perm_name: str | None = None,
 ) -> bool:
-    try:
-        member = await get_member_or_fail(db, user_id, organization_id)
-        perms = await get_member_permissions(db, member)
-        if perms.get("is_owner") or perms.get("can_create_projects") or perms.get("can_manage_members"):
-            return True
-        if perm_name and perms.get(perm_name):
-            return True
-        pm = (await db.execute(
-            select(ProjectMember).where(
-                and_(
-                    ProjectMember.project_id == project_id,
-                    ProjectMember.user_id == user_id,
-                    ProjectMember.role_in_project.in_(["Организатор", "Руководитель проекта"])
-                )
-            )
-        )).scalar_one_or_none()
-        return pm is not None
-    except Exception:
-        return False
+    return await is_project_organizer_or_privileged(db, project_id, user_id, organization_id, perm_name)
 
 
 # =========================================================================
@@ -121,54 +107,7 @@ async def create_project(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    member = await get_member_or_fail(db, current_user.id, org_id)
-    perms = await get_member_permissions(db, member)
-    if not perms.get("can_create_projects") and not perms.get("is_owner"):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Недостаточно прав для создания проектов",
-        )
-
-    project = Project(
-        organization_id=org_id,
-        name=data.name.strip(),
-        description=data.description,
-        category=data.category,
-        budget=data.budget,
-        start_date=data.start_date,
-        end_date=data.end_date,
-    )
-    db.add(project)
-    await db.flush()
-
-    # Создатель автоматически добавляется в участники проекта как Организатор
-    pm = ProjectMember(
-        project_id=project.id,
-        user_id=current_user.id,
-        role_in_project="Организатор",
-    )
-    db.add(pm)
-    await db.flush()
-
-    cat_map = {
-        "development": "Разработка",
-        "business_analysis": "Бизнес-аналитика",
-        "marketing": "Маркетинг",
-        "hr": "HR",
-        "logistics": "Логистика",
-        "finance": "Финансы",
-        "other": "Другое",
-    }
-    cat_ru = cat_map.get(project.category, project.category)
-    await log_audit_action(
-        db,
-        organization_id=org_id,
-        user_id=current_user.id,
-        action="Создание проекта",
-        entity_type="Проект",
-        entity_id=str(project.id),
-        details=f"Создан проект '{project.name}' (категория: {cat_ru})",
-    )
+    project = await create_project_record(db, org_id, data, current_user)
 
     board_id = None
     try:
@@ -263,27 +202,14 @@ async def update_project(
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
 
-    member = await get_member_or_fail(db, current_user.id, p.organization_id)
-    perms = await get_member_permissions(db, member)
-    if not perms.get("can_create_projects") and not perms.get("is_owner"):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="permission_denied")
-
-    if data.name is not None:
-        p.name = data.name.strip()
-    if data.description is not None:
-        p.description = data.description
-    if data.category is not None:
-        p.category = data.category
-    if data.status is not None:
-        p.status = data.status
-    if data.budget is not None:
-        p.budget = data.budget
-    if data.start_date is not None:
-        p.start_date = data.start_date
-    if data.end_date is not None:
-        p.end_date = data.end_date
-
-    await db.flush()
+    changes = {key: value for key, value in data.model_dump(exclude_unset=True).items() if value is not None}
+    if "status" in changes:
+        member = await get_member_or_fail(db, current_user.id, p.organization_id)
+        perms = await get_member_permissions(db, member)
+        if not perms.get("can_create_projects") and not perms.get("is_owner"):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="permission_denied")
+        p.status = changes.pop("status")
+    await update_project_record(db, p, current_user, changes)
     return await get_project(project_id, current_user, db)
 
 
@@ -544,51 +470,7 @@ async def create_project_task(
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
 
-    can_edit = await _is_project_organizer_or_privileged(db, project_id, current_user.id, p.organization_id, "can_edit_tasks")
-    if not can_edit:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="permission_denied")
-
-    task = ProjectTask(
-        project_id=project_id,
-        title=data.title.strip(),
-        description=data.description,
-        priority=data.priority,
-        assignee_id=data.assignee_id,
-        created_by_id=current_user.id,
-        start_date=data.start_date,
-        due_date=data.due_date,
-    )
-    db.add(task)
-    await db.flush()
-
-    # Синхронизация: создаем карточку на связанной Kanban-доске
-    try:
-        from app.utils.kanban_sync import ensure_project_board, map_task_status_to_column
-        from app.models.board import Card, BoardColumn, CardPriority
-        board = await ensure_project_board(db, p.organization_id, project_id, p.name, current_user.id)
-        cols_res = await db.execute(select(BoardColumn).where(BoardColumn.board_id == board.id).order_by(BoardColumn.position))
-        cols = cols_res.scalars().all()
-        target_col = map_task_status_to_column(task.status, cols)
-        if target_col:
-            p_val = CardPriority.MEDIUM
-            if task.priority in [x.value for x in CardPriority]:
-                p_val = CardPriority(task.priority)
-            card = Card(
-                board_id=board.id,
-                column_id=target_col.id,
-                project_task_id=task.id,
-                title=task.title,
-                description=task.description,
-                priority=p_val,
-                due_date=task.due_date,
-                creator_id=task.created_by_id,
-                assignee_id=task.assignee_id,
-                position=0,
-            )
-            db.add(card)
-            await db.flush()
-    except Exception:
-        pass
+    task = await create_project_task_service(db, p, data, current_user)
 
     assignee_name = None
     if task.assignee_id:
@@ -610,53 +492,8 @@ async def update_task(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="task_not_found")
 
     p = (await db.execute(select(Project).where(Project.id == task.project_id))).scalar_one()
-    can_edit = await _is_project_organizer_or_privileged(db, task.project_id, current_user.id, p.organization_id, "can_edit_tasks")
-    is_assignee = task.assignee_id == current_user.id
-    if not can_edit and not is_assignee:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="permission_denied")
-
-    if data.title is not None and can_edit:
-        task.title = data.title.strip()
-    if data.description is not None and can_edit:
-        task.description = data.description
-    if data.priority is not None and can_edit:
-        task.priority = data.priority
-    if data.assignee_id is not None and can_edit:
-        task.assignee_id = data.assignee_id
-    if data.start_date is not None:
-        task.start_date = data.start_date
-    if data.due_date is not None:
-        task.due_date = data.due_date
-
-    if data.status is not None:
-        task.status = data.status
-        if data.status == "completed" and not task.completed_at:
-            task.completed_at = datetime.now(timezone.utc)
-
-    await db.flush()
-
-    # Синхронизация карточки на Kanban-доске
-    try:
-        from app.utils.kanban_sync import map_task_status_to_column
-        from app.models.board import Card, BoardColumn, CardPriority
-        c_res = await db.execute(select(Card).where(Card.project_task_id == task.id))
-        card = c_res.scalar_one_or_none()
-        if card:
-            card.title = task.title
-            card.description = task.description
-            if task.priority in [x.value for x in CardPriority]:
-                card.priority = CardPriority(task.priority)
-            card.assignee_id = task.assignee_id
-            card.due_date = task.due_date
-            if data.status is not None:
-                cols_res = await db.execute(select(BoardColumn).where(BoardColumn.board_id == card.board_id).order_by(BoardColumn.position))
-                cols = cols_res.scalars().all()
-                target_col = map_task_status_to_column(task.status, cols)
-                if target_col and card.column_id != target_col.id:
-                    card.column_id = target_col.id
-            await db.flush()
-    except Exception:
-        pass
+    changes = {key: value for key, value in data.model_dump(exclude_unset=True).items() if value is not None}
+    await update_project_task_record(db, p, task, current_user, changes, allow_status=True)
 
     assignee_name = None
     if task.assignee_id:
@@ -868,17 +705,7 @@ async def create_project_document(
     if not p:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="project_not_found")
 
-    await get_member_or_fail(db, current_user.id, p.organization_id)
-
-    doc = ProjectDocument(
-        project_id=project_id,
-        title=data.title.strip(),
-        content=data.content,
-        category=data.category,
-        author_id=current_user.id,
-    )
-    db.add(doc)
-    await db.flush()
+    doc = await create_project_document_service(db, p, data, current_user)
 
     return DocumentOut(
         id=doc.id,
@@ -904,21 +731,7 @@ async def update_project_document(
     if not doc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="doc_not_found")
 
-    p = (await db.execute(select(Project).where(Project.id == doc.project_id))).scalar_one()
-    member = await get_member_or_fail(db, current_user.id, p.organization_id)
-    perms = await get_member_permissions(db, member)
-
-    if not perms.get("is_owner") and doc.author_id != current_user.id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="permission_denied")
-
-    if data.title is not None:
-        doc.title = data.title.strip()
-    if data.content is not None:
-        doc.content = data.content
-    if data.category is not None:
-        doc.category = data.category
-
-    await db.flush()
+    await update_project_document_service(db, doc, current_user, data.model_dump(exclude_unset=True))
     return DocumentOut(
         id=doc.id,
         project_id=doc.project_id,

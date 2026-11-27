@@ -77,6 +77,10 @@ export default function ProjectPage() {
   const [editProjBudget, setEditProjBudget] = useState(0);
   const [editProjStart, setEditProjStart] = useState('');
   const [editProjEnd, setEditProjEnd] = useState('');
+  const [githubIntegration, setGithubIntegration] = useState(null);
+  const [editRepoUrl, setEditRepoUrl] = useState('');
+  const [editGithubToken, setEditGithubToken] = useState('');
+  const [removeGithubToken, setRemoveGithubToken] = useState(false);
 
   // Project documents (RAG) & edit doc
   const [docs, setDocs] = useState([]);
@@ -259,6 +263,12 @@ export default function ProjectPage() {
     setEditProjBudget(project.budget || 0);
     setEditProjStart(project.start_date || '');
     setEditProjEnd(project.end_date || '');
+    api.getGitHubIntegration(projectId).then((integration) => {
+      setGithubIntegration(integration);
+      setEditRepoUrl(integration.repo_url || '');
+      setEditGithubToken('');
+      setRemoveGithubToken(false);
+    }).catch((err) => alert(err.message));
     setShowEditProject(true);
   };
 
@@ -274,6 +284,13 @@ export default function ProjectPage() {
         start_date: editProjStart || null,
         end_date: editProjEnd || null,
       });
+      const integration = await api.updateGitHubIntegration(projectId, {
+        repo_url: editRepoUrl.trim() || null,
+        token: editGithubToken.trim() || null,
+        remove_token: removeGithubToken,
+      });
+      if (integration.warning) alert(integration.warning);
+      setGithubIntegration(integration);
       setProject(updated);
       setShowEditProject(false);
     } catch (err) {
@@ -384,12 +401,10 @@ export default function ProjectPage() {
     setAiLoading(true);
     setAiReply('');
     try {
-      const apiKey = localStorage.getItem('soprano_gemini_api_key') || undefined;
       const res = await api.askAI({
         prompt: aiPrompt,
         project_id: projectId,
         organization_id: orgId,
-        api_key: apiKey,
       });
       setAiReply(res.answer);
       setAiPrompt('');
@@ -1368,6 +1383,20 @@ export default function ProjectPage() {
                   rows={3}
                 />
               </div>
+              {(isOwner || currentMember?.permissions?.can_create_projects) && <>
+                <div className="form-group">
+                  <label>Репозиторий GitHub (необязательно)</label>
+                  <input className="form-input" type="url" placeholder="https://github.com/owner/repository" value={editRepoUrl} onChange={e => setEditRepoUrl(e.target.value)} />
+                </div>
+                <div className="form-group">
+                  <label>Токен GitHub (PAT)</label>
+                  <input className="form-input" type="password" autoComplete="new-password" placeholder={githubIntegration?.token_configured ? `Токен задан ••••${githubIntegration.token_last4}` : 'github_pat_…'} value={editGithubToken} onChange={e => setEditGithubToken(e.target.value)} />
+                  <small style={{ color: 'var(--text-muted)' }}>Токен используется только для чтения выбранного репозитория.</small>
+                  {githubIntegration?.token_configured && <label style={{ display: 'flex', gap: 8, marginTop: 8, alignItems: 'center' }}>
+                    <input type="checkbox" checked={removeGithubToken} onChange={e => setRemoveGithubToken(e.target.checked)} /> Удалить сохранённый токен
+                  </label>}
+                </div>
+              </>}
               <div className="modal-actions" style={{ justifyContent: 'space-between' }}>
                 {isOwner && (
                   <button

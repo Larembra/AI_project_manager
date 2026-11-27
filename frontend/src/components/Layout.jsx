@@ -193,8 +193,7 @@ export default function Layout() {
     setShowQuickModal(true);
     setQuickResult('');
     try {
-      const apiKey = localStorage.getItem('soprano_gemini_api_key') || undefined;
-      const res = await api.askAI({ prompt: quickPrompt, api_key: apiKey });
+      const res = await api.askAI({ prompt: quickPrompt });
       setQuickResult(res.answer);
       setQuickPrompt('');
     } catch (err) {

@@ -1,6 +1,9 @@
 import uuid
+from contextvars import ContextVar
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit import AuditLog
+
+actor_source: ContextVar[str] = ContextVar("actor_source", default="user")
 
 async def log_action(
     db: AsyncSession,
@@ -17,7 +20,8 @@ async def log_action(
         action=action,
         entity_type=entity_type,
         entity_id=entity_id,
-        details=details
+        details=details,
+        via_agent=actor_source.get() == "agent",
     )
     db.add(log)
     # We do not commit here to allow callers to group the log within their transaction

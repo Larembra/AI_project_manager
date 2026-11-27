@@ -120,6 +120,13 @@ export const api = {
 
   // AI Advisor (Gemini)
   askAI: (data) => request('/ai/ask', { method: 'POST', body: JSON.stringify(data) }),
+  confirmAIAction: (id) => request(`/ai/actions/${id}/confirm`, { method: 'POST' }),
+  rejectAIAction: (id) => request(`/ai/actions/${id}/reject`, { method: 'POST' }),
+  getAIConversations: () => request('/ai/conversations'),
+  createAIConversation: () => request('/ai/conversations', { method: 'POST', body: JSON.stringify({}) }),
+  getAIConversation: (id) => request(`/ai/conversations/${id}`),
+  renameAIConversation: (id, title) => request(`/ai/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) }),
+  deleteAIConversation: (id) => request(`/ai/conversations/${id}`, { method: 'DELETE' }),
 
   // Roles
   getRoles: (orgId) => request(`/organizations/${orgId}/roles/`),
@@ -131,6 +138,8 @@ export const api = {
   getProjects: (orgId) => request(`/organizations/${orgId}/projects/`),
   createProject: (orgId, data) => request(`/organizations/${orgId}/projects/`, { method: 'POST', body: JSON.stringify(data) }),
   getProject: (projectId) => request(`/projects/${projectId}`),
+  getGitHubIntegration: (projectId) => request(`/projects/${projectId}/integrations/github`),
+  updateGitHubIntegration: (projectId, data) => request(`/projects/${projectId}/integrations/github`, { method: 'PUT', body: JSON.stringify(data) }),
   updateProject: (projectId, data) => request(`/projects/${projectId}`, { method: 'PUT', body: JSON.stringify(data) }),
   deleteProject: (projectId) => request(`/projects/${projectId}`, { method: 'DELETE' }),
 
