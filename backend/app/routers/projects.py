@@ -1,4 +1,5 @@
 import uuid
+import logging
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select, func, and_
@@ -18,9 +19,11 @@ from app.utils.auth import get_current_user
 from app.utils.permissions import get_member_or_fail, get_member_permissions
 from app.utils.audit import log_audit_action
 from app.services.access import is_project_organizer_or_privileged
-from app.services.tasks import create_project_task as create_project_task_service
+from app.services.tasks import create_project_task as create_project_task_service, update_project_task_record
 from app.services.projects import create_project_record, update_project_record
 from app.services.documents import create_project_document as create_project_document_service, update_project_document as update_project_document_service
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["projects"])
 
@@ -67,7 +70,7 @@ async def list_projects(
 
         c_count = (await db.execute(
             select(func.count(ProjectTask.id)).where(
-                and_(ProjectTask.project_id == p.id, ProjectTask.status == "completed")
+                and_(ProjectTask.project_id == p.id, ProjectTask.status == "completed", ProjectTask.approval_status == "approved")
             )
         )).scalar() or 0
 
@@ -115,7 +118,7 @@ async def create_project(
         board = await ensure_project_board(db, org_id, project.id, project.name, current_user.id)
         board_id = board.id
     except Exception:
-        pass
+        logger.exception("Не удалось инициализировать Kanban-доску проекта %s", project.id)
 
     return ProjectOut(
         id=project.id,
@@ -159,7 +162,7 @@ async def get_project(
 
     c_count = (await db.execute(
         select(func.count(ProjectTask.id)).where(
-            and_(ProjectTask.project_id == p.id, ProjectTask.status == "completed")
+            and_(ProjectTask.project_id == p.id, ProjectTask.status == "completed", ProjectTask.approval_status == "approved")
         )
     )).scalar() or 0
 
@@ -169,7 +172,7 @@ async def get_project(
         board = await ensure_project_board(db, p.organization_id, p.id, p.name, current_user.id)
         board_id = board.id
     except Exception:
-        pass
+        logger.exception("Не удалось инициализировать Kanban-доску проекта %s", p.id)
 
     return ProjectOut(
         id=p.id,
@@ -539,7 +542,7 @@ async def complete_task_with_metrics(
         if card:
             cols_res = await db.execute(select(BoardColumn).where(BoardColumn.board_id == card.board_id).order_by(BoardColumn.position))
             cols = cols_res.scalars().all()
-            target_col = map_task_status_to_column("completed", cols)
+            target_col = map_task_status_to_column("completed", cols, task.approval_status)
             if target_col and card.column_id != target_col.id:
                 card.column_id = target_col.id
             await db.flush()
@@ -604,7 +607,7 @@ async def approve_or_reject_task(
             new_st = "completed" if data.approved else "in_progress"
             cols_res = await db.execute(select(BoardColumn).where(BoardColumn.board_id == card.board_id).order_by(BoardColumn.position))
             cols = cols_res.scalars().all()
-            target_col = map_task_status_to_column(new_st, cols)
+            target_col = map_task_status_to_column(new_st, cols, task.approval_status)
             if target_col and card.column_id != target_col.id:
                 card.column_id = target_col.id
             await db.flush()

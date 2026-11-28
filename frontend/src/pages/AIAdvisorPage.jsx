@@ -158,13 +158,28 @@ export default function AIAdvisorPage() {
   };
 
   const handleResolveAction = async (id, confirm) => {
+    setLoading(true);
     try {
       if (confirm) {
         const result = await api.confirmAIAction(id);
         setPendingActions((items) => items.filter((item) => item.id !== id));
         setToolCalls((items) => items.map((item) => item.id === id ? { ...item, status: result.status, result: result.result || item.result } : item));
         const message = result.status === 'confirmed' ? `Действие выполнено: ${result.result?.title || 'изменения сохранены'}.` : 'Срок подтверждения истёк. Действие не выполнено.';
-        setHistory((items) => [...items, { id: `action-${id}`, role: 'advisor', text: message, timestamp: new Date().toISOString() }]);
+        if (result.status === 'confirmed') {
+          const continuation = await api.askAI({
+            prompt: `Предыдущее действие подтверждено и выполнено: ${message} Результат: ${JSON.stringify(result.result || {})}. Продолжи выполнять исходный запрос пользователя, используя доступные инструменты, если для этого остались необходимые шаги. Не повторяй уже выполненное действие.`,
+            conversation_id: activeConversationId,
+            organization_id: organizationId || undefined,
+            project_id: projectId || undefined,
+            api_key: apiKey.trim() || undefined,
+          });
+          setPendingActions((items) => [...items, ...(continuation.actions || [])]);
+          setToolCalls((items) => [...items, ...(continuation.tool_calls || [])]);
+          const conversation = await api.getAIConversation(activeConversationId);
+          setHistory(conversation.messages.map((item) => ({ id: item.id, role: item.role === 'assistant' ? 'advisor' : 'user', text: item.content, timestamp: item.created_at })));
+        } else {
+          setHistory((items) => [...items, { id: `action-${id}`, role: 'advisor', text: message, timestamp: new Date().toISOString() }]);
+        }
       } else {
         const result = await api.rejectAIAction(id);
         setPendingActions((items) => items.filter((item) => item.id !== id));
@@ -172,6 +187,8 @@ export default function AIAdvisorPage() {
       }
     } catch (err) {
       setError(err.message || 'Не удалось обработать подтверждение');
+    } finally {
+      setLoading(false);
     }
   };
 

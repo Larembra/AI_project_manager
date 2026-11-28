@@ -97,6 +97,7 @@ export default function ProjectPage() {
   // Analytics & Calendar
   const [analytics, setAnalytics] = useState(null);
   const [calendarEvents, setCalendarEvents] = useState([]);
+  const [kanbanRefreshKey, setKanbanRefreshKey] = useState(0);
 
   // Project AI Assistant
   const [aiPrompt, setAiPrompt] = useState('');
@@ -614,11 +615,11 @@ export default function ProjectPage() {
                                 Отчет: «{t.completion_comment}»
                               </span>
                             )}
-                            {t.approval_comment && (
-                              <span style={{ color: '#ffb74d' }}>
-                                Замечание проверяющего: «{t.approval_comment}»
-                              </span>
-                            )}
+                          </div>
+                        )}
+                        {t.approval_comment && (
+                          <div style={{ marginTop: 8, fontSize: 12, color: '#ffb74d' }}>
+                            Замечание проверяющего: «{t.approval_comment}»
                           </div>
                         )}
                       </div>
@@ -694,13 +695,14 @@ export default function ProjectPage() {
                   Интерактивная доска задач проекта «{project?.name}». Задачи синхронизированы со списком, календарем и диаграммой Ганта.
                 </p>
               </div>
-              <button className="btn btn-secondary btn-sm" onClick={() => loadTasks()}>
+              <button className="btn btn-secondary btn-sm" onClick={() => project?.board_id ? setKanbanRefreshKey((key) => key + 1) : loadProjectData()}>
                 Обновить
               </button>
             </div>
 
             {project?.board_id ? (
               <KanbanBoard
+                key={`${project.board_id}-${kanbanRefreshKey}`}
                 orgId={orgId}
                 initialBoardId={project.board_id}
                 hideBoardSelector={true}

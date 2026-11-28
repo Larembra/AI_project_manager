@@ -21,7 +21,7 @@ async def create_project_task(db: AsyncSession, project: Project, data: TaskCrea
             from app.models.board import BoardColumn, Card, CardPriority
             board = await ensure_project_board(db, project.organization_id, project.id, project.name, user.id)
             result = await db.execute(select(BoardColumn).where(BoardColumn.board_id == board.id).order_by(BoardColumn.position))
-            target_column = map_task_status_to_column(task.status, result.scalars().all())
+            target_column = map_task_status_to_column(task.status, result.scalars().all(), task.approval_status)
             if target_column:
                 priority = CardPriority(task.priority) if task.priority in {item.value for item in CardPriority} else CardPriority.MEDIUM
                 db.add(Card(board_id=board.id, column_id=target_column.id, project_task_id=task.id, title=task.title, description=task.description, priority=priority, due_date=task.due_date, creator_id=user.id, assignee_id=task.assignee_id, position=0))
@@ -67,7 +67,7 @@ async def update_project_task_record(db: AsyncSession, project: Project, task: P
                 if allow_status and "status" in changes:
                     from app.utils.kanban_sync import map_task_status_to_column
                     columns = (await db.execute(select(BoardColumn).where(BoardColumn.board_id == card.board_id).order_by(BoardColumn.position))).scalars().all()
-                    target_column = map_task_status_to_column(task.status, columns)
+                    target_column = map_task_status_to_column(task.status, columns, task.approval_status)
                     if target_column:
                         card.column_id = target_column.id
                 await db.flush()

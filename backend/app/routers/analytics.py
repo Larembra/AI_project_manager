@@ -76,7 +76,7 @@ async def get_organization_analytics(
 
         for t in tasks:
             total_tasks += 1
-            if t.status == "completed":
+            if t.status == "completed" and t.approval_status == "approved":
                 completed_tasks += 1
                 p_completed += 1
                 rev = float(t.revenue_impact)
@@ -191,7 +191,7 @@ async def get_project_analytics(
         timeline_map[d_str] = {"revenue": 0.0, "cost": 0.0, "profit": 0.0, "clients": 0}
 
     for t in tasks:
-        if t.status == "completed":
+        if t.status == "completed" and t.approval_status == "approved":
             completed += 1
             r = float(t.revenue_impact)
             c = float(t.cost_impact)

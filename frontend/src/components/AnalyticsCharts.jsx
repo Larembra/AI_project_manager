@@ -4,15 +4,15 @@ export default function AnalyticsCharts({ data, title = "Аналитическ�
   if (!data) return null;
 
   const {
-    total_revenue = 0,
-    total_cost = 0,
-    net_profit = 0,
-    total_clients = 0,
+    total_revenue = data.revenue ?? 0,
+    total_cost = data.cost ?? 0,
+    net_profit = data.profit ?? 0,
+    total_clients = data.clients ?? 0,
     total_workers = 0,
-    total_tasks = 0,
-    completed_tasks = 0,
-    overdue_tasks = 0,
-    in_progress_tasks = 0,
+    total_tasks = data.tasks_total ?? 0,
+    completed_tasks = data.tasks_completed ?? 0,
+    overdue_tasks = data.tasks_overdue ?? 0,
+    in_progress_tasks = data.tasks_in_progress ?? 0,
     projects_breakdown = [],
     timeline = []
   } = data;

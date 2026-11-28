@@ -145,6 +145,15 @@ async def confirm_action(action_id: uuid.UUID, user: User = Depends(get_current_
                 if not approved:
                     task.status = "in_progress"
                 await db.flush()
+                from app.models.board import BoardColumn, Card
+                from app.utils.kanban_sync import map_task_status_to_column
+                card = (await db.execute(select(Card).where(Card.project_task_id == task.id))).scalar_one_or_none()
+                if card:
+                    columns = (await db.execute(select(BoardColumn).where(BoardColumn.board_id == card.board_id).order_by(BoardColumn.position))).scalars().all()
+                    target_column = map_task_status_to_column(task.status, columns, task.approval_status)
+                    if target_column:
+                        card.column_id = target_column.id
+                    await db.flush()
                 action.result = {"task_id": str(task.id), "title": task.title, "status": task.status, "approval_status": task.approval_status, "approval_comment": task.approval_comment}
             action.status = "confirmed"
             action.executed_at = datetime.now(timezone.utc)

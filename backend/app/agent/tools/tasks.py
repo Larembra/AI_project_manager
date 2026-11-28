@@ -55,8 +55,8 @@ async def list_project_tasks(context: AgentContext) -> list[dict]:
 async def get_project_analytics(context: AgentContext) -> dict:
     project = (await context.db.execute(select(Project).where(Project.id == context.project_id))).scalar_one()
     task_count = await context.db.scalar(select(func.count()).select_from(ProjectTask).where(ProjectTask.project_id == project.id)) or 0
-    completed_count = await context.db.scalar(select(func.count()).select_from(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.status == "completed")) or 0
-    urgent_count = await context.db.scalar(select(func.count()).select_from(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.priority == "urgent", ProjectTask.status != "completed")) or 0
+    completed_count = await context.db.scalar(select(func.count()).select_from(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.status == "completed", ProjectTask.approval_status == "approved")) or 0
+    urgent_count = await context.db.scalar(select(func.count()).select_from(ProjectTask).where(ProjectTask.project_id == project.id, ProjectTask.priority == "urgent", ProjectTask.approval_status == "approved")) or 0
     revenue_total = await context.db.scalar(select(func.coalesce(func.sum(ProjectTask.revenue_impact), 0)).where(ProjectTask.project_id == project.id)) or 0
     cost_total = await context.db.scalar(select(func.coalesce(func.sum(ProjectTask.cost_impact), 0)).where(ProjectTask.project_id == project.id)) or 0
     return {"task_count": task_count, "completed_task_count": completed_count, "open_urgent_task_count": urgent_count, "budget": float(project.budget), "revenue_impact": float(revenue_total), "cost_impact": float(cost_total)}
